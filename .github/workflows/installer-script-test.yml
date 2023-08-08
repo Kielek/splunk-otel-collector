@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - installer-zc-attributes
   pull_request:
     paths:
       - '.github/workflows/installer-script-test.yml'

@@ -410,33 +410,34 @@ configure_fluentd() {
   fi
 }
 
-update_deployment_environment() {
-  local deployment_environment="$1"
+update_resource_attributes() {
+  local key="$1"
+  local value="$2"
 
-  if grep -q -E "^resource_attributes=.*deployment\.environment=${deployment_environment}(,|$)" "$instrumentation_config_path"; then
-    echo "The 'deployment.environment=${deployment_environment}' resource attribute already exists in ${instrumentation_config_path}"
+  if grep -q -E "^resource_attributes=.*${key}=${value}(,|$)" "$instrumentation_config_path"; then
+    echo "The '${key}=${value}' resource attribute already exists in ${instrumentation_config_path}"
   else
-    echo "Adding 'deployment.environment=${deployment_environment}' resource attribute to $instrumentation_config_path"
+    echo "Adding '${key}=${value}' resource attribute to $instrumentation_config_path"
     if grep -q '^resource_attributes=' "$instrumentation_config_path"; then
-      # traverse through existing resource attributes to add/update deployment.environment
-      deployment_environment_found="false"
+      # traverse through existing resource attributes to add/update the attribute
+      attribute_found="false"
       attributes=""
       for i in $(grep '^resource_attributes=' "$instrumentation_config_path" | sed 's|^resource_attributes=||' | sed 's|,| |g'); do
-        key="$(echo "$i" | cut -d= -f1)"
-        value="$(echo "$i" | cut -d= -f2)"
-        if [ "$key" = "deployment.environment" ]; then
-          deployment_environment_found="true"
-          value="$deployment_environment"
+        k="$(echo "$i" | cut -d= -f1)"
+        v="$(echo "$i" | cut -d= -f2)"
+        if [ "$k" = "$key" ]; then
+          attribute_found="true"
+          v="$value"
         fi
-        attributes="${attributes},${key}=${value}"
+        attributes="${attributes},${k}=${v}"
       done
-      if [ "$deployment_environment_found" != "true" ]; then
-        attributes="${attributes},deployment.environment=${deployment_environment}"
+      if [ "$attribute_found" != "true" ]; then
+        attributes="${attributes},${key}=${value}"
       fi
       sed -i "s|^resource_attributes=.*|resource_attributes=${attributes#,}|" "$instrumentation_config_path"
     else
       # "resource_attributes=" line not found, simply append the line to the config file
-      echo "resource_attributes=deployment.environment=${deployment_environment}" >> "$instrumentation_config_path"
+      echo "resource_attributes=${key}=${value}" >> "$instrumentation_config_path"
     fi
   fi
 }
@@ -456,13 +457,28 @@ update_instrumentation_option() {
 
 update_instrumentation_config() {
   local deployment_environment="$1"
+  local splunk_zc_deployment_method="installer"
+  local splunk_zc_version=""
+
+  case "$distro" in
+    ubuntu|debian)
+      splunk_zc_version="$( dpkg-query --showformat='${Version}' --show splunk-otel-auto-instrumentation )"
+      ;;
+    *)
+      splunk_zc_version="$( rpm -q --queryformat='%{VERSION}' splunk-otel-auto-instrumentation )"
+      ;;
+  esac
 
   if [ -f "$instrumentation_config_path" ]; then
     ts="$(date '+%Y%m%d-%H%M%S')"
     echo "Backing up $instrumentation_config_path as ${instrumentation_config_path}.bak.${ts}"
     cp "$instrumentation_config_path" "${instrumentation_config_path}.bak.${ts}"
+    update_resource_attributes "splunk.zc.deployment.method" "$splunk_zc_deployment_method"
+    if [ -n "$splunk_zc_version" ]; then
+      update_resource_attributes "splunk.zc.version" "$splunk_zc_version"
+    fi
     if [ -n "$deployment_environment" ]; then
-      update_deployment_environment "$deployment_environment"
+      update_resource_attributes "deployment.environment" "$deployment_environment"
     fi
     if [ -n "$service_name" ]; then
       update_instrumentation_option "service_name" "$service_name"

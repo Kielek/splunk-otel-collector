@@ -297,8 +297,12 @@ def test_installer_with_instrumentation_default(distro, arch):
             # verify /etc/ld.so.preload is configured
             run_container_cmd(container, f"grep '^{LIBSPLUNK_PATH}$' /etc/ld.so.preload")
 
+            # verify telemetry attributes
+            run_container_cmd(container, f"grep '^resource_attributes=splunk.zc.deployment.method=installer,.*$' {INSTR_CONF_PATH}")
+            run_container_cmd(container, f"grep '^resource_attributes=.*,splunk.zc.version=.*$' {INSTR_CONF_PATH}")
+
             # verify deployment.environment attribute is not set
-            run_container_cmd(container, f"grep -v '^resource_attributes=deployment.environment=.*$' {INSTR_CONF_PATH}")
+            run_container_cmd(container, f"grep -v '^resource_attributes=.*deployment.environment=.*$' {INSTR_CONF_PATH}")
 
             # verify default options
             run_container_cmd(container, f"grep '^disable_telemetry=false$' {INSTR_CONF_PATH}")
@@ -337,6 +341,7 @@ def test_installer_with_instrumentation_custom(distro, arch):
         "--enable-profiler",
         "--enable-profiler-memory",
         "--enable-metrics",
+        "--instrumentation-version 0.80.0",
     ))
 
     print(f"Testing installation on {distro} from {STAGE} stage ...")
@@ -363,8 +368,12 @@ def test_installer_with_instrumentation_custom(distro, arch):
             # verify /etc/ld.so.preload is configured
             run_container_cmd(container, f"grep '^{LIBSPLUNK_PATH}$' /etc/ld.so.preload")
 
+            # verify telemetry attributes
+            run_container_cmd(container, f"grep '^resource_attributes=splunk.zc.deployment.method=installer,.*$' {INSTR_CONF_PATH}")
+            run_container_cmd(container, f"grep '^resource_attributes=.*,splunk.zc.version=0\\.80\\.0,.*$' {INSTR_CONF_PATH}")
+
             # verify deployment.environment is set
-            run_container_cmd(container, f"grep '^resource_attributes=deployment.environment=test$' {INSTR_CONF_PATH}")
+            run_container_cmd(container, f"grep '^resource_attributes=.*,deployment.environment=test$' {INSTR_CONF_PATH}")
 
             # verify custom options
             run_container_cmd(container, f"grep '^disable_telemetry=true$' {INSTR_CONF_PATH}")
