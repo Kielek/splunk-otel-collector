@@ -29,8 +29,8 @@ LIBSPLUNK_INSTALL_PATH="${INSTALL_DIR}/libsplunk.so"
 JAVA_AGENT_INSTALL_PATH="${INSTALL_DIR}/splunk-otel-javaagent.jar"
 CONFIG_INSTALL_PATH="${INSTALL_DIR}/instrumentation.conf"
 CONFIG_PATH="$REPO_DIR/instrumentation/install/instrumentation.conf"
-EXAMPLES_INSTALL_DIR="${INSTALL_DIR}/examples"
-EXAMPLES_DIR="${FPM_DIR}/examples"
+SYSTEMD_GENERATOR_PATH="${FPM_DIR}/00-splunk-otel-javaagent.sh"
+SYSTEMD_GENERATOR_INSTALL_PATH="${INSTALL_DIR}/systemd-environment-generators/00-splunk-otel-javaagent.sh"
 
 JAVA_AGENT_RELEASE_PATH="${FPM_DIR}/../java-agent-release.txt"
 JAVA_AGENT_RELEASE_URL="https://github.com/signalfx/splunk-otel-java/releases/"
@@ -86,8 +86,8 @@ setup_files_and_permissions() {
     sudo chown root:root "$buildroot/$CONFIG_INSTALL_PATH"
     sudo chmod 644 "$buildroot/$CONFIG_INSTALL_PATH"
 
-    mkdir -p "$buildroot/$INSTALL_DIR"
-    cp -rf "$EXAMPLES_DIR" "$buildroot/$INSTALL_DIR/"
-    sudo chown -R root:root "$buildroot/$EXAMPLES_INSTALL_DIR"
-    sudo chmod -R 644 "$buildroot/$EXAMPLES_INSTALL_DIR"
+    mkdir -p "$buildroot/$(dirname $SYSTEMD_GENERATOR_INSTALL_PATH)"
+    cp -f "$SYSTEMD_GENERATOR_PATH" "$buildroot/$SYSTEMD_GENERATOR_INSTALL_PATH"
+    sudo chown root:root "$buildroot/$SYSTEMD_GENERATOR_INSTALL_PATH"
+    sudo chmod 755 "$buildroot/$SYSTEMD_GENERATOR_INSTALL_PATH"
 }

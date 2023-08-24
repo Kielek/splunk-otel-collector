@@ -44,12 +44,13 @@ COLLECTOR_CONFIG_PATH = TESTS_DIR / "instrumentation" / "config.yaml"
 JAVA_AGENT_PATH = "/usr/lib/splunk-instrumentation/splunk-otel-javaagent.jar"
 
 PKG_NAME = "splunk-otel-auto-instrumentation"
-LIBSPLUNK_PATH = "/usr/lib/splunk-instrumentation/libsplunk.so"
-DEFAULT_INSTRUMENTATION_CONF = "/usr/lib/splunk-instrumentation/instrumentation.conf"
-CUSTOM_INSTRUMENTATION_CONF = TESTS_DIR / "instrumentation" / "libsplunk-test.conf"
-DEFAULT_SYSTEMD_CONF_PATH = "/usr/lib/splunk-instrumentation/examples/systemd/00-splunk-otel-javaagent.conf"
-CUSTOM_SYSTEMD_CONF_PATH = TESTS_DIR / "instrumentation" / "systemd-test.conf"
-SYSTEMD_CONF_DIR = "/usr/lib/systemd/system.conf.d"
+INSTALL_DIR = "/usr/lib/splunk-instrumentation"
+LIBSPLUNK_PATH = f"{INSTALL_DIR}/libsplunk.so"
+DEFAULT_INSTRUMENTATION_CONF = f"{INSTALL_DIR}/instrumentation.conf"
+CUSTOM_PRELOAD_CONF = TESTS_DIR / "instrumentation" / "preload-test.conf"
+CUSTOM_SYSTEMD_CONF = TESTS_DIR / "instrumentation" / "systemd-test.conf"
+SYSTEMD_GENERATOR_PATH = f"{INSTALL_DIR}/systemd-environment-generators/00-splunk-otel-javaagent.sh"
+SYSTEMD_GENERATORS_DIR = "/usr/lib/systemd/system-environment-generators"
 PRELOAD_PATH = "/etc/ld.so.preload"
 
 
@@ -102,24 +103,27 @@ def verify_preload(container, line, exists=True):
         assert not match, f"'{line}' found in {PRELOAD_PATH}"
 
 
-def verify_tomcat_instrumentation(container, otelcol_path, test_case, source, attributes=[]):
-    if source == "systemd":
+def verify_tomcat_instrumentation(container, otelcol_path, method, attributes=[]):
+    if method == "systemd":
         if otelcol_path is None:
-            container.restart()
+            container.kill()
+            container.wait()
+            container.start()
             wait_for_container_cmd(container, "systemctl show-environment", timeout=30)
             wait_for_container_cmd(container, "systemctl status splunk-otel-collector", timeout=30)
             # get the output stream for the collector from journald
             stream = container.exec_run("journalctl -u splunk-otel-collector -f", stream=True).output
         else:
-            run_container_cmd(container, f"mkdir -p {SYSTEMD_CONF_DIR}")
-            run_container_cmd(container, f"cp {DEFAULT_SYSTEMD_CONF_PATH} {SYSTEMD_CONF_DIR}/")
-            if test_case == "custom":
-                copy_file_into_container(container, CUSTOM_SYSTEMD_CONF_PATH,
-                                         f"{SYSTEMD_CONF_DIR}/99-systemd-test.conf")
-            container.restart()
+            # install the systemd generator script
+            run_container_cmd(container, f"mkdir -p {SYSTEMD_GENERATORS_DIR}")
+            run_container_cmd(container, f"cp -p {SYSTEMD_GENERATOR_PATH} {SYSTEMD_GENERATORS_DIR}/")
+            container.kill()
+            container.wait()
+            container.start()
             wait_for_container_cmd(container, "systemctl show-environment", timeout=30)
             # start the collector and get the output stream
             stream = container.exec_run(f"{otelcol_path} --config=/test/config.yaml", stream=True).output
+
         print("Starting the tomcat systemd service ...")
         run_container_cmd(container, "systemctl start tomcat")
     else:
@@ -128,13 +132,11 @@ def verify_tomcat_instrumentation(container, otelcol_path, test_case, source, at
             # get the output stream for the collector from journald
             stream = container.exec_run("journalctl -u splunk-otel-collector -f", stream=True).output
         else:
-            run_container_cmd(container,
-                              "sh -c 'echo /usr/lib/splunk-instrumentation/libsplunk.so > /etc/ld.so.preload'")
-            if test_case == "custom":
-                # overwrite the default instrumentation.conf with the custom one for testing
-                copy_file_into_container(container, CUSTOM_INSTRUMENTATION_CONF, DEFAULT_INSTRUMENTATION_CONF)
+            # add libsplunk.so to /etc/ld.so.preload
+            run_container_cmd(container, f"sh -c 'echo {INSTALL_DIR}/libsplunk.so > /etc/ld.so.preload'")
             # start the collector and get the output stream
             stream = container.exec_run(f"{otelcol_path} --config=/test/config.yaml", stream=True).output
+
         print("Starting tomcat from a shell ...")
         tomcat_env = {
             "JAVA_HOME": "/opt/java/openjdk",
@@ -174,8 +176,8 @@ def verify_tomcat_instrumentation(container, otelcol_path, test_case, source, at
     )
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
 @pytest.mark.parametrize("test_case", ["default", "custom"])
-@pytest.mark.parametrize("source", ["systemd", "libsplunk"])
-def test_tomcat_instrumentation(distro, arch, test_case, source):
+@pytest.mark.parametrize("method", ["systemd", "preload"])
+def test_tomcat_instrumentation(distro, arch, test_case, method):
     if distro == "opensuse-12" and arch == "arm64":
         pytest.skip("opensuse-12 arm64 no longer supported")
 
@@ -194,11 +196,11 @@ def test_tomcat_instrumentation(distro, arch, test_case, source):
         run_container_cmd(container, f"chmod a+x /test/{otelcol_bin}")
 
         install_package(container, distro, f"/test/{pkg_base}")
-        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, DEFAULT_SYSTEMD_CONF_PATH]:
+        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, SYSTEMD_GENERATOR_PATH]:
             assert container_file_exists(container, path), f"{path} not found"
 
         if test_case == "default":
-            if source == "libsplunk":
+            if method == "preload":
                 # service name auto-generated by libsplunk.so
                 service_name = r"Str\(org-apache-catalina-startup-bootstrap\)"
             else:
@@ -207,8 +209,13 @@ def test_tomcat_instrumentation(distro, arch, test_case, source):
             environment = None
             profiling = None
         else:
-            service_name = rf"Str\(service_name_from_{source}\)"
-            environment = rf"Str\(deployment_environment_from_{source}\)"
+            # overwrite the default instrumentation.conf with the custom one for testing
+            if method == "systemd":
+                copy_file_into_container(container, CUSTOM_SYSTEMD_CONF, DEFAULT_INSTRUMENTATION_CONF)
+            else:
+                copy_file_into_container(container, CUSTOM_PRELOAD_CONF, DEFAULT_INSTRUMENTATION_CONF)
+            service_name = rf"Str\(service_name_from_{method}\)"
+            environment = rf"Str\(deployment_environment_from_{method}\)"
             profiling = r"Str\(otel\.profiling\)"
 
         attributes = [
@@ -218,7 +225,7 @@ def test_tomcat_instrumentation(distro, arch, test_case, source):
             {"key": r"com\.splunk\.sourcetype", "value": profiling, "found": False if profiling else True},
         ]
 
-        verify_tomcat_instrumentation(container, f"/test/{otelcol_bin}", test_case, source, attributes)
+        verify_tomcat_instrumentation(container, f"/test/{otelcol_bin}", method, attributes)
 
 
 @pytest.mark.parametrize(
@@ -244,7 +251,7 @@ def test_package_uninstall(distro, arch):
 
         verify_preload(container, "# This line should be preserved")
 
-        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, DEFAULT_SYSTEMD_CONF_PATH]:
+        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, SYSTEMD_GENERATOR_PATH]:
             assert container_file_exists(container, path), f"{path} not found"
 
         # verify libsplunk.so was not automatically added to /etc/ld.so.preload
@@ -266,7 +273,7 @@ def test_package_uninstall(distro, arch):
             assert container.exec_run(f"rpm -q {PKG_NAME}").exit_code != 0
 
         # verify files were uninstalled
-        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, DEFAULT_SYSTEMD_CONF_PATH]:
+        for path in [JAVA_AGENT_PATH, LIBSPLUNK_PATH, DEFAULT_INSTRUMENTATION_CONF, SYSTEMD_GENERATOR_PATH]:
             assert not container_file_exists(container, path)
 
         # verify libsplunk.so was removed from /etc/ld.so.preload
