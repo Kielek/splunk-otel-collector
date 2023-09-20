@@ -46,10 +46,33 @@
     state: present
   notify: "reset iis"
 
+- name: Get installed signalfx-dotnet-tracing MSI version
+  ansible.windows.win_shell: |
+    $msi_version = ""
+    $msi_name = "SignalFx .NET Tracing 64-bit"
+    $regkey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+    try {
+      $msi_version = (Get-ItemProperty ${regkey}\* |  Where { $_.DisplayName -eq "$msi_name" }).DisplayVersion
+    } catch {
+      continue
+    }
+    echo $msi_version
+  changed_when: dotnet_msi.changed
+  register: msi_version
+
 - name: Create registry path
   ansible.windows.win_regedit:
     path: "{{ iis_registry_key }}"
     state: present
+
+- name: Get global tags
+  set_fact:
+    global_tags: |-
+      {%- set method = "" -%}
+      {%- if msi_version.stdout != "" -%}
+        {%- set method = "splunk.zc.method:signalfx-dotnet-tracing-" + (msi_version.stdout | trim) -%}
+      {%- endif -%}
+      {{ (signalfx_dotnet_auto_instrumentation_global_tags + "," + method) | trim(",") }}
 
 - name: Get IIS options list
   set_fact:
@@ -57,6 +80,9 @@
       {%- set value = item.value -%}
       {%- if (item.value | type_debug) == "bool" -%}
         {%- set value = item.value | string | lower -%}
+      {%- endif -%}
+      {%- if item.key == "SIGNALFX_GLOBAL_TAGS" -%}
+        {%- set value = global_tags -%}
       {%- endif -%}
       {{ (options_list | default([])) + [item.key + '=' + (value | string)] }}
   loop: "{{ dotnet_options | combine(signalfx_dotnet_auto_instrumentation_additional_options) | dict2items }}"
@@ -85,6 +111,9 @@
       {%- set value = item.value -%}
       {%- if (item.value | type_debug) == "bool" -%}
         {%- set value = item.value | string | lower -%}
+      {%- endif -%}
+      {%- if item.key == "SIGNALFX_GLOBAL_TAGS" -%}
+        {%- set value = global_tags -%}
       {%- endif -%}
       {{ value | string }}
     type: string
